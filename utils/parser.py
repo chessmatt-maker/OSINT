@@ -29,27 +29,42 @@ def parse_ground_truth(file_content: str) -> dict:
 
 
 def sanitize_spiderfoot(json_content: str) -> list:
-    """Filters out low-value infrastructure nodes from SpiderFoot output."""
+    """Aggressively filters SpiderFoot JSON exports to retain only actionable intelligence."""
     try:
         data = json.loads(json_content)
     except json.JSONDecodeError:
         return []
 
-    # Filter criteria: ignore SSL certs, open ports, standard DNS records
-    ignored_types = [
-        "TCP_PORT_OPEN", "SSL_CERTIFICATE", "DNS_RECORD",
-        "HTTP_HEADER", "BGP_AS_OWNER", "NETBLOCK_OWNER"
-    ]
+    allowed_types = {"ACCOUNT_EXTERNAL_OWNED", "EMAILADDR_COMPROMISED", "USERNAME"}
 
     sanitized = []
-    # Assumes standard SpiderFoot export structure
     for event in data:
-        if isinstance(event, dict) and event.get('type') not in ignored_types:
-            sanitized.append({
-                "type": event.get("type"),
-                "data": event.get("data"),
-                "module": event.get("module")
-            })
+        if not isinstance(event, dict):
+            continue
+
+        event_type = event.get("event_type")
+        if event_type not in allowed_types:
+            continue
+
+        raw_data = event.get("data", "")
+        source_data = event.get("source_data")
+        record = {"event_type": event_type, "source_data": source_data}
+
+        if event_type == "ACCOUNT_EXTERNAL_OWNED":
+            parts = raw_data.split("\n", 1)
+            record["platform_description"] = parts[0].strip() if parts else raw_data
+            record["url"] = parts[1].strip() if len(parts) > 1 else None
+        elif event_type == "EMAILADDR_COMPROMISED":
+            match = re.match(r"^(.+?)\s+\[(.+?)\]$", raw_data.strip())
+            if match:
+                record["email"] = match.group(1).strip()
+                record["breach_source"] = match.group(2).strip()
+            else:
+                record["data"] = raw_data
+        else:
+            record["data"] = raw_data
+
+        sanitized.append(record)
 
     return sanitized
 
