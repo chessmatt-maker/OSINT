@@ -8,3 +8,5 @@ docxtpl>=0.16.7
 
 # Gemini API
 google-generativeai>=0.4.0
+
+requests
