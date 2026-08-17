@@ -13,22 +13,25 @@ st.sidebar.header("1. Data Ingestion")
 st.sidebar.markdown("Upload your raw extraction files below.")
 
 gt_file = st.sidebar.file_uploader("Upload Ground Truth (.txt)", type=["txt"])
-sf_file = st.sidebar.file_uploader("Upload SpiderFoot Scan (.json)", type=["json"])
-mg_file = st.sidebar.file_uploader("Upload Maigret Output (.json)", type=["json"])
+sf_files = st.sidebar.file_uploader("Upload SpiderFoot Scan(s) (.json)", type=["json"], accept_multiple_files=True)
+mg_files = st.sidebar.file_uploader("Upload Maigret Output(s) (.json)", type=["json"], accept_multiple_files=True)
 
 if st.sidebar.button("Run OSINT Evaluation", type="primary"):
-    if not (gt_file and sf_file and mg_file):
-        st.sidebar.error("Please upload all three files to proceed.")
+    if not (gt_file and (sf_files or mg_files)):
+        st.sidebar.error("Please upload the Ground Truth file and at least one SpiderFoot or Maigret file.")
     else:
         # --- PROCESSING PIPELINE ---
         with st.spinner("Step 1: Parsing and Sanitizing Input Data..."):
             gt_text = gt_file.getvalue().decode("utf-8")
-            sf_text = sf_file.getvalue().decode("utf-8")
-            mg_text = mg_file.getvalue().decode("utf-8")
-
             ground_truth = parse_ground_truth(gt_text)
-            sf_sanitized = sanitize_spiderfoot(sf_text)
-            mg_sanitized = sanitize_maigret(mg_text)
+
+            sf_sanitized = []
+            for f in sf_files:
+                sf_sanitized.extend(sanitize_spiderfoot(f.getvalue().decode("utf-8")))
+
+            mg_sanitized = []
+            for f in mg_files:
+                mg_sanitized.extend(sanitize_maigret(f.getvalue().decode("utf-8")))
 
         with st.spinner("Step 2: Connecting to Vertex AI for Connection Chain Analysis..."):
             analysis_results = evaluate_osint_data(ground_truth, sf_sanitized, mg_sanitized)
