@@ -21,7 +21,7 @@ def evaluate_osint_data(ground_truth: dict, spiderfoot_data: list, maigret_data:
     if not initialize_gemini():
         return {}
 
-    model = genai.GenerativeModel("gemini-1.5-pro")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     
     prompt = f"""
     You are an expert intelligence analyst assisting civil litigation defense attorneys.
