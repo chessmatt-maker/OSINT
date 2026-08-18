@@ -1,6 +1,6 @@
 import streamlit as st
 from utils.parser import parse_ground_truth, sanitize_spiderfoot, sanitize_maigret
-from utils.ai_engine import evaluate_osint_data
+from utils.ai_engine import evaluate_osint_data, filter_by_ground_truth
 from utils.report_gen import generate_docx_report
 
 st.set_page_config(page_title="OSINT Lit-Defense Pipeline", layout="wide", page_icon="⚖️")
@@ -33,11 +33,48 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
             for f in mg_files:
                 mg_sanitized.extend(sanitize_maigret(f.getvalue().decode("utf-8")))
 
-        with st.spinner("Step 2: Connecting to Vertex AI for Connection Chain Analysis..."):
+        with st.spinner("Step 2: Filtering SpiderFoot results against Ground Truth..."):
+            gt_filter_results = filter_by_ground_truth(ground_truth, sf_sanitized)
+
+        with st.spinner("Step 3: Connecting to Vertex AI for Connection Chain Analysis..."):
             analysis_results = evaluate_osint_data(ground_truth, sf_sanitized, mg_sanitized)
 
         if analysis_results:
             st.success("Analysis Complete!")
+
+            # --- Ground Truth Filter Results ---
+            if gt_filter_results:
+                st.header("🔍 Ground Truth Filter Results")
+                fr = gt_filter_results.get("filtered_results", {})
+
+                acv = gt_filter_results.get("actionable_contact_vectors", {})
+                if acv.get("primary_phone") or acv.get("primary_email"):
+                    st.subheader("✅ Actionable Contact Vectors")
+                    col_p, col_e = st.columns(2)
+                    col_p.metric("Primary Phone", acv.get("primary_phone") or "—")
+                    col_e.metric("Primary Email", acv.get("primary_email") or "—")
+
+                col_vm, col_pm = st.columns(2)
+                with col_vm:
+                    st.subheader("✅ Verified Matches")
+                    for item in fr.get("verified_matches", []):
+                        st.success(item)
+                with col_pm:
+                    st.subheader("🔶 Probable Matches")
+                    for item in fr.get("probable_matches", []):
+                        st.warning(item)
+
+                col_di, col_un = st.columns(2)
+                with col_di:
+                    st.subheader("❌ Divergent Identities")
+                    for item in fr.get("divergent_identities", []):
+                        st.error(f"**{item.get('conflict_reason', '')}** — {item.get('raw_data', '')}")
+                with col_un:
+                    st.subheader("❓ Unverified Noise")
+                    for item in fr.get("unverified_noise", []):
+                        st.info(item)
+
+                st.divider()
 
             # --- UI PREVIEW ---
             st.header("Executive Summary")
@@ -61,8 +98,9 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
                 st.code(dork, language="plaintext")
 
             # --- DOCUMENT GENERATION ---
-            with st.spinner("Step 3: Generating Litigation-Ready Word Report..."):
-                doc_bytes = generate_docx_report(ground_truth, analysis_results)
+            with st.spinner("Step 4: Generating Litigation-Ready Word Report..."):
+                acv = gt_filter_results.get("actionable_contact_vectors", {}) if gt_filter_results else {}
+                doc_bytes = generate_docx_report(ground_truth, analysis_results, acv)
 
             st.divider()
             st.download_button(
