@@ -2,6 +2,21 @@ import json
 import streamlit as st
 import google.generativeai as genai
 
+
+def _normalize_str(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _to_set(value) -> set:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {_normalize_str(value)} if value.strip() else set()
+    if isinstance(value, list):
+        return {_normalize_str(v) for v in value if str(v).strip()}
+    return set()
+
+
 def initialize_gemini():
     """Initializes the Gemini API using the key from Streamlit secrets."""
     try:
@@ -157,3 +172,96 @@ def evaluate_osint_data(ground_truth: dict, spiderfoot_data: list, maigret_data:
     except Exception as e:
         st.error(f"AI Evaluation failed: {str(e)}")
         return {}
+
+
+def compare_external_findings(
+    ground_truth: dict,
+    maigret_data: list,
+    hibp_data: list,
+    dehashed_data: list,
+) -> dict:
+    """
+    Deterministically compare external-source findings against ground truth and
+    bucket into confirmed/probable/unrelated categories.
+    """
+    gt_emails = _to_set(ground_truth.get("emails", []))
+    gt_usernames = _to_set(ground_truth.get("usernames", []))
+    gt_names = _to_set([ground_truth.get("primary_name", ""), *(ground_truth.get("aliases", []) or [])])
+
+    confirmed = []
+    probable = []
+    unrelated = []
+
+    for item in maigret_data or []:
+        username = _normalize_str(item.get("username", ""))
+        platform = item.get("platform", "Unknown")
+        url = item.get("url", "")
+        if username and username in gt_usernames:
+            confirmed.append({
+                "source": "Maigret",
+                "match_type": "username_exact",
+                "platform": platform,
+                "url": url,
+                "detail": f"Exact username match on {platform}: {item.get('username', '')}",
+            })
+        elif username:
+            probable.append({
+                "source": "Maigret",
+                "match_type": "username_candidate",
+                "platform": platform,
+                "url": url,
+                "detail": f"Potential account on {platform}: {item.get('username', '')}",
+            })
+
+    for item in hibp_data or []:
+        email = _normalize_str(item.get("email", ""))
+        breach_name = item.get("breach_name", "") or item.get("title", "")
+        detail = f"Breach '{breach_name}' for {item.get('email', '')}".strip()
+        record = {
+            "source": "HIBP",
+            "match_type": "email_breach",
+            "email": item.get("email", ""),
+            "breach_name": breach_name,
+            "detail": detail,
+            "data_classes": item.get("data_classes", []),
+        }
+        if email in gt_emails:
+            confirmed.append(record)
+        elif email:
+            probable.append(record)
+        else:
+            unrelated.append(record)
+
+    for item in dehashed_data or []:
+        email = _normalize_str(item.get("email", ""))
+        username = _normalize_str(item.get("username", ""))
+        name = _normalize_str(item.get("name", ""))
+        db_name = item.get("database_name", "")
+        record = {
+            "source": "Dehashed",
+            "match_type": "credential_exposure",
+            "email": item.get("email", ""),
+            "username": item.get("username", ""),
+            "name": item.get("name", ""),
+            "database_name": db_name,
+            "detail": f"Credential record in '{db_name}' (email={item.get('email', '')}, username={item.get('username', '')})",
+        }
+        if email and email in gt_emails:
+            confirmed.append(record)
+        elif username and username in gt_usernames:
+            confirmed.append(record)
+        elif name and name in gt_names:
+            probable.append(record)
+        else:
+            unrelated.append(record)
+
+    return {
+        "confirmed": confirmed,
+        "probable": probable,
+        "unrelated": unrelated,
+        "counts": {
+            "confirmed": len(confirmed),
+            "probable": len(probable),
+            "unrelated": len(unrelated),
+        },
+    }

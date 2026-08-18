@@ -240,6 +240,11 @@ def sanitize_maigret(json_content: str) -> list:
     except json.JSONDecodeError:
         return []
 
+    if isinstance(data, dict) and isinstance(data.get("sites"), dict):
+        data = data["sites"]
+    if not isinstance(data, dict):
+        return []
+
     sanitized = []
     # Maigret typically nests findings under site names
     for site, details in data.items():
@@ -251,4 +256,85 @@ def sanitize_maigret(json_content: str) -> list:
                 "tags": details.get("tags", [])
             })
 
+    return sanitized
+
+
+def sanitize_hibp(raw_results) -> list:
+    """Normalizes HIBP breached-account responses into a compact structure."""
+    if not raw_results:
+        return []
+    if isinstance(raw_results, dict):
+        raw_results = [raw_results]
+    if not isinstance(raw_results, list):
+        return []
+
+    sanitized = []
+    seen = set()
+    for row in raw_results:
+        if not isinstance(row, dict):
+            continue
+        email = str(row.get("email", "")).strip().lower()
+        breaches = row.get("breaches", [])
+        if not email or not isinstance(breaches, list):
+            continue
+        for breach in breaches:
+            if not isinstance(breach, dict):
+                continue
+            item = {
+                "source": "HIBP",
+                "email": email,
+                "breach_name": breach.get("Name", ""),
+                "title": breach.get("Title", ""),
+                "domain": breach.get("Domain", ""),
+                "breach_date": breach.get("BreachDate", ""),
+                "added_date": breach.get("AddedDate", ""),
+                "pwn_count": breach.get("PwnCount", 0),
+                "data_classes": breach.get("DataClasses", []) or [],
+            }
+            key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            if key in seen:
+                continue
+            seen.add(key)
+            sanitized.append(item)
+    return sanitized
+
+
+def sanitize_dehashed(raw_results) -> list:
+    """Normalizes Dehashed search results into compact identity/breach records."""
+    if not raw_results:
+        return []
+    if isinstance(raw_results, dict):
+        raw_results = [raw_results]
+    if not isinstance(raw_results, list):
+        return []
+
+    sanitized = []
+    seen = set()
+    for row in raw_results:
+        if not isinstance(row, dict):
+            continue
+        query = str(row.get("query", "")).strip()
+        entries = row.get("entries", [])
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item = {
+                "source": "Dehashed",
+                "query": query,
+                "email": str(entry.get("email", "")).strip().lower(),
+                "username": str(entry.get("username", "")).strip(),
+                "name": str(entry.get("name", "")).strip(),
+                "ip_address": str(entry.get("ip_address", "")).strip(),
+                "database_name": str(entry.get("database_name", "")).strip(),
+                "hashed_password": str(entry.get("hashed_password", "")).strip(),
+            }
+            if not any([item["email"], item["username"], item["name"], item["ip_address"]]):
+                continue
+            key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            if key in seen:
+                continue
+            seen.add(key)
+            sanitized.append(item)
     return sanitized
