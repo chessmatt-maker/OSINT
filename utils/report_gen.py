@@ -131,7 +131,7 @@ def _replace_flat_placeholders(doc: Document, context: dict):
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate_docx_report(ground_truth: dict, ai_analysis: dict,
+def generate_docx_report(ground_truth: dict, ai_analysis: dict, actionable_contact_vectors: dict = None,
                          template_path="templates/report_template.docx") -> io.BytesIO:
     """
     Generates a Word report programmatically using python-docx.
@@ -154,6 +154,7 @@ def generate_docx_report(ground_truth: dict, ai_analysis: dict,
     # ------------------------------------------------------------------
     # 2. Build flat-variable context and substitute throughout the doc
     # ------------------------------------------------------------------
+    acv = actionable_contact_vectors or {}
     context = {
         "report_date": datetime.now().strftime("%B %d, %Y"),
         "subject_name": ground_truth.get("primary_name", "Unknown Subject"),
@@ -161,6 +162,8 @@ def generate_docx_report(ground_truth: dict, ai_analysis: dict,
         "known_locations": ", ".join(ground_truth.get("locations", [])),
         "known_emails": ", ".join(ground_truth.get("emails", [])),
         "executive_summary": ai_analysis.get("executive_summary", "No summary generated."),
+        "primary_phone": acv.get("primary_phone", ""),
+        "primary_email": acv.get("primary_email", ""),
     }
     _replace_flat_placeholders(doc, context)
 
