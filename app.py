@@ -3,7 +3,6 @@ import json
 
 from utils.parser import (
     parse_ground_truth,
-    sanitize_spiderfoot,
     sanitize_maigret,
     sanitize_hibp,
     sanitize_dehashed,
@@ -17,35 +16,26 @@ st.set_page_config(page_title="OSINT Lit-Defense Pipeline", layout="wide", page_
 st.title("⚖️ OSINT Pipeline for Civil Litigation")
 st.markdown("Automated intake, AI-driven filtering, and litigation-ready report generation.")
 
-# --- SIDEBAR: File Uploads ---
+# --- SIDEBAR: Direct Inputs ---
 st.sidebar.header("1. Data Ingestion")
-st.sidebar.markdown("Upload your raw extraction files below.")
-
 gt_file = st.sidebar.file_uploader("Upload Ground Truth (.txt)", type=["txt"])
-sf_files = st.sidebar.file_uploader("Upload SpiderFoot Scan(s) (.json)", type=["json"], accept_multiple_files=True)
-mg_files = st.sidebar.file_uploader("Upload Maigret Output(s) (.json)", type=["json"], accept_multiple_files=True)
 st.sidebar.header("2. Optional Direct Inputs")
 extra_emails = st.sidebar.text_area("Emails (comma-separated)", placeholder="john@example.com, jane@example.com")
 extra_usernames = st.sidebar.text_area("Usernames (comma-separated)", placeholder="john_doe, jdoe1988")
 
 if st.sidebar.button("Run OSINT Evaluation", type="primary"):
-    has_direct_ids = bool((extra_emails or "").strip() or (extra_usernames or "").strip())
-    if not (gt_file and (sf_files or mg_files or has_direct_ids)):
-        st.sidebar.error("Please upload Ground Truth and provide either source files or direct email/username inputs.")
+    if not gt_file:
+        st.sidebar.error("Please upload Ground Truth.")
     else:
         # --- PROCESSING PIPELINE ---
         with st.spinner("Step 1: Parsing and Sanitizing Input Data..."):
             gt_text = gt_file.getvalue().decode("utf-8")
             ground_truth = parse_ground_truth(gt_text)
             identifiers = collect_identifiers(ground_truth, extra_emails, extra_usernames)
-
-            sf_sanitized = []
-            for f in (sf_files or []):
-                sf_sanitized.extend(sanitize_spiderfoot(f.getvalue().decode("utf-8")))
-
+            if not (identifiers.get("emails") or identifiers.get("usernames")):
+                st.sidebar.error("Please provide at least one email or username in Ground Truth or the direct inputs.")
+                st.stop()
             mg_sanitized = []
-            for f in (mg_files or []):
-                mg_sanitized.extend(sanitize_maigret(f.getvalue().decode("utf-8")))
 
         with st.spinner("Step 2: Running HIBP/Dehashed lookups and Maigret scans..."):
             hibp_result = query_hibp(identifiers.get("emails", []))
@@ -70,8 +60,8 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
                 + maigret_runtime_result.get("errors", [])
             )
 
-        with st.spinner("Step 3: Filtering SpiderFoot results against Ground Truth..."):
-            gt_filter_results = filter_by_ground_truth(ground_truth, sf_sanitized)
+        with st.spinner("Step 3: Filtering external results against Ground Truth..."):
+            gt_filter_results = filter_by_ground_truth(ground_truth, [])
             external_summary = compare_external_findings(
                 ground_truth,
                 mg_sanitized,
@@ -80,7 +70,7 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
             )
 
         with st.spinner("Step 4: Connecting to Vertex AI for Connection Chain Analysis..."):
-            analysis_results = evaluate_osint_data(ground_truth, sf_sanitized, mg_sanitized)
+            analysis_results = evaluate_osint_data(ground_truth, [], mg_sanitized)
 
         if analysis_results:
             st.success("Analysis Complete!")
