@@ -7,6 +7,11 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Mm, Pt
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +273,133 @@ def generate_docx_report(ground_truth: dict, ai_analysis: dict, actionable_conta
     doc.save(doc_io)
     doc_io.seek(0)
     return doc_io
+
+
+def _list_value(value) -> str:
+    if isinstance(value, list):
+        return ", ".join([str(v) for v in value if str(v).strip()]) or "N/A"
+    if value is None:
+        return "N/A"
+    text = str(value).strip()
+    return text or "N/A"
+
+
+def generate_pdf_report(
+    ground_truth: dict,
+    ai_analysis: dict,
+    external_summary: dict,
+    actionable_contact_vectors: dict = None,
+) -> io.BytesIO:
+    """Generate an attorney-friendly PDF report for OSINT findings."""
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=LETTER,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        textColor=colors.HexColor("#1B365D"),
+        spaceAfter=16,
+    )
+    section_style = ParagraphStyle(
+        "Section",
+        parent=styles["Heading2"],
+        textColor=colors.HexColor("#1B365D"),
+        spaceBefore=10,
+        spaceAfter=8,
+    )
+    body_style = styles["BodyText"]
+
+    acv = actionable_contact_vectors or {}
+    confirmed = (external_summary or {}).get("confirmed", [])
+    probable = (external_summary or {}).get("probable", [])
+    unrelated = (external_summary or {}).get("unrelated", [])
+    counts = (external_summary or {}).get("counts", {})
+
+    story = [
+        Paragraph("OSINT Identity & Exposure Analysis Report", title_style),
+        Paragraph(f"Report Date: {datetime.now().strftime('%B %d, %Y')}", body_style),
+        Spacer(1, 0.12 * inch),
+    ]
+
+    overview_rows = [
+        ["Subject Name", _list_value(ground_truth.get("primary_name", ground_truth.get("name", "N/A")))],
+        ["Known Aliases", _list_value(ground_truth.get("aliases", []))],
+        ["Known Locations", _list_value(ground_truth.get("locations", []))],
+        ["Known Emails", _list_value(ground_truth.get("emails", []))],
+        ["Known Usernames", _list_value(ground_truth.get("usernames", []))],
+        ["Primary Verified Phone", _list_value(acv.get("primary_phone", ""))],
+        ["Primary Verified Email", _list_value(acv.get("primary_email", ""))],
+    ]
+    overview_table = Table(overview_rows, colWidths=[1.9 * inch, 5.3 * inch])
+    overview_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EEF3FA")),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#C6D3E5")),
+        ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#FAFCFF")]),
+    ]))
+    story.extend([Paragraph("Subject Baseline", section_style), overview_table, Spacer(1, 0.16 * inch)])
+
+    story.append(Paragraph("Executive Summary", section_style))
+    story.append(Paragraph(ai_analysis.get("executive_summary", "No executive summary generated."), body_style))
+    story.append(Spacer(1, 0.16 * inch))
+
+    summary_rows = [
+        ["Confirmed Matches", str(counts.get("confirmed", 0))],
+        ["Probable Matches", str(counts.get("probable", 0))],
+        ["Unrelated/Noise", str(counts.get("unrelated", 0))],
+    ]
+    summary_table = Table(summary_rows, colWidths=[2.4 * inch, 1.2 * inch])
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1B365D")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#C6D3E5")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F7FD")]),
+    ]))
+    story.extend([Paragraph("Match Overview", section_style), summary_table, Spacer(1, 0.16 * inch)])
+
+    def _add_record_section(title: str, records: list):
+        story.append(Paragraph(title, section_style))
+        if not records:
+            story.append(Paragraph("No entries.", body_style))
+            story.append(Spacer(1, 0.1 * inch))
+            return
+        for idx, rec in enumerate(records, start=1):
+            detail = rec.get("detail", "")
+            source = rec.get("source", "Unknown")
+            story.append(Paragraph(f"<b>{idx}. [{source}]</b> {detail}", body_style))
+            extras = []
+            for key in ("platform", "url", "email", "username", "breach_name", "database_name"):
+                value = rec.get(key)
+                if value:
+                    extras.append(f"{key.replace('_', ' ').title()}: {value}")
+            if extras:
+                story.append(Paragraph(" • " + " | ".join(extras), body_style))
+            story.append(Spacer(1, 0.06 * inch))
+
+    _add_record_section("Confirmed Public-Facing Accounts / Exposure Links", confirmed)
+    _add_record_section("Probable Matches Requiring Manual Verification", probable)
+    _add_record_section("Unrelated or Low-Confidence Noise", unrelated)
+
+    story.append(Paragraph("Attorney Notes", section_style))
+    story.append(Paragraph(
+        "The findings above are organized by confidence. Confirmed entries align with known identifiers from the "
+        "ground-truth baseline, while probable entries require corroboration before legal reliance.",
+        body_style,
+    ))
+
+    doc.build(story)
+    output.seek(0)
+    return output

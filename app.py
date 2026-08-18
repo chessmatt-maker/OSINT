@@ -1,7 +1,16 @@
 import streamlit as st
-from utils.parser import parse_ground_truth, sanitize_spiderfoot, sanitize_maigret
-from utils.ai_engine import evaluate_osint_data, filter_by_ground_truth
-from utils.report_gen import generate_docx_report
+import json
+
+from utils.parser import (
+    parse_ground_truth,
+    sanitize_spiderfoot,
+    sanitize_maigret,
+    sanitize_hibp,
+    sanitize_dehashed,
+)
+from utils.ai_engine import evaluate_osint_data, filter_by_ground_truth, compare_external_findings
+from utils.report_gen import generate_docx_report, generate_pdf_report
+from utils.osint_sources import collect_identifiers, query_hibp, query_dehashed, run_maigret_usernames
 
 st.set_page_config(page_title="OSINT Lit-Defense Pipeline", layout="wide", page_icon="⚖️")
 
@@ -15,32 +24,85 @@ st.sidebar.markdown("Upload your raw extraction files below.")
 gt_file = st.sidebar.file_uploader("Upload Ground Truth (.txt)", type=["txt"])
 sf_files = st.sidebar.file_uploader("Upload SpiderFoot Scan(s) (.json)", type=["json"], accept_multiple_files=True)
 mg_files = st.sidebar.file_uploader("Upload Maigret Output(s) (.json)", type=["json"], accept_multiple_files=True)
+st.sidebar.header("2. Optional Direct Inputs")
+extra_emails = st.sidebar.text_area("Emails (comma-separated)", placeholder="john@example.com, jane@example.com")
+extra_usernames = st.sidebar.text_area("Usernames (comma-separated)", placeholder="john_doe, jdoe1988")
 
 if st.sidebar.button("Run OSINT Evaluation", type="primary"):
-    if not (gt_file and (sf_files or mg_files)):
-        st.sidebar.error("Please upload the Ground Truth file and at least one SpiderFoot or Maigret file.")
+    has_direct_ids = bool((extra_emails or "").strip() or (extra_usernames or "").strip())
+    if not (gt_file and (sf_files or mg_files or has_direct_ids)):
+        st.sidebar.error("Please upload Ground Truth and provide either source files or direct email/username inputs.")
     else:
         # --- PROCESSING PIPELINE ---
         with st.spinner("Step 1: Parsing and Sanitizing Input Data..."):
             gt_text = gt_file.getvalue().decode("utf-8")
             ground_truth = parse_ground_truth(gt_text)
+            identifiers = collect_identifiers(ground_truth, extra_emails, extra_usernames)
 
             sf_sanitized = []
-            for f in sf_files:
+            for f in (sf_files or []):
                 sf_sanitized.extend(sanitize_spiderfoot(f.getvalue().decode("utf-8")))
 
             mg_sanitized = []
-            for f in mg_files:
+            for f in (mg_files or []):
                 mg_sanitized.extend(sanitize_maigret(f.getvalue().decode("utf-8")))
 
-        with st.spinner("Step 2: Filtering SpiderFoot results against Ground Truth..."):
-            gt_filter_results = filter_by_ground_truth(ground_truth, sf_sanitized)
+        with st.spinner("Step 2: Running HIBP/Dehashed lookups and Maigret scans..."):
+            hibp_result = query_hibp(identifiers.get("emails", []))
+            dehashed_result = query_dehashed(
+                identifiers.get("emails", []),
+                identifiers.get("usernames", []),
+            )
+            maigret_runtime_result = run_maigret_usernames(identifiers.get("usernames", []))
 
-        with st.spinner("Step 3: Connecting to Vertex AI for Connection Chain Analysis..."):
+            for scan in maigret_runtime_result.get("results", []):
+                payload = scan.get("payload")
+                if payload is None:
+                    continue
+                mg_sanitized.extend(sanitize_maigret(json.dumps(payload)))
+
+            hibp_sanitized = sanitize_hibp(hibp_result.get("results", []))
+            dehashed_sanitized = sanitize_dehashed(dehashed_result.get("results", []))
+
+            source_errors = (
+                hibp_result.get("errors", [])
+                + dehashed_result.get("errors", [])
+                + maigret_runtime_result.get("errors", [])
+            )
+
+        with st.spinner("Step 3: Filtering SpiderFoot results against Ground Truth..."):
+            gt_filter_results = filter_by_ground_truth(ground_truth, sf_sanitized)
+            external_summary = compare_external_findings(
+                ground_truth,
+                mg_sanitized,
+                hibp_sanitized,
+                dehashed_sanitized,
+            )
+
+        with st.spinner("Step 4: Connecting to Vertex AI for Connection Chain Analysis..."):
             analysis_results = evaluate_osint_data(ground_truth, sf_sanitized, mg_sanitized)
 
         if analysis_results:
             st.success("Analysis Complete!")
+            if source_errors:
+                st.warning("Some external lookups could not complete:\n- " + "\n- ".join(source_errors))
+
+            st.header("📡 External Source Comparison")
+            counts = external_summary.get("counts", {})
+            col_c, col_p, col_u = st.columns(3)
+            col_c.metric("Confirmed", counts.get("confirmed", 0))
+            col_p.metric("Probable", counts.get("probable", 0))
+            col_u.metric("Unrelated", counts.get("unrelated", 0))
+
+            with st.expander("Confirmed Findings", expanded=True):
+                for item in external_summary.get("confirmed", []):
+                    st.success(item.get("detail", ""))
+            with st.expander("Probable Findings", expanded=False):
+                for item in external_summary.get("probable", []):
+                    st.warning(item.get("detail", ""))
+            with st.expander("Unrelated/Noise", expanded=False):
+                for item in external_summary.get("unrelated", []):
+                    st.info(item.get("detail", ""))
 
             # --- Ground Truth Filter Results ---
             if gt_filter_results:
@@ -98,9 +160,10 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
                 st.code(dork, language="plaintext")
 
             # --- DOCUMENT GENERATION ---
-            with st.spinner("Step 4: Generating Litigation-Ready Word Report..."):
+            with st.spinner("Step 5: Generating Litigation-Ready Reports..."):
                 acv = gt_filter_results.get("actionable_contact_vectors", {}) if gt_filter_results else {}
                 doc_bytes = generate_docx_report(ground_truth, analysis_results, acv)
+                pdf_bytes = generate_pdf_report(ground_truth, analysis_results, external_summary, acv)
 
             st.divider()
             st.download_button(
@@ -109,6 +172,13 @@ if st.sidebar.button("Run OSINT Evaluation", type="primary"):
                 file_name=f"OSINT_Report_{ground_truth.get('primary_name', 'Subject').replace(' ', '_')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 type="primary"
+            )
+            st.download_button(
+                label="📘 Download Attorney Summary (.pdf)",
+                data=pdf_bytes,
+                file_name=f"OSINT_Report_{ground_truth.get('primary_name', 'Subject').replace(' ', '_')}.pdf",
+                mime="application/pdf",
+                type="secondary"
             )
         else:
             st.error("Pipeline failed during AI Evaluation. Check your GCP Service Account credentials and quota.")
