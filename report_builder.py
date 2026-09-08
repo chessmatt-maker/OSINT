@@ -119,7 +119,7 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
 
     warn_p = doc.add_paragraph()
     warn_run = warn_p.add_run(
-        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required..."
+        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required[...]
     )
     warn_run.font.color.rgb = RGBColor(185, 28, 28)
     warn_run.font.italic = True
@@ -137,6 +137,9 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
     blacklisted_tags = {'porn', 'adult', 'nsfw', 'dating', 'cam', 'sex'}
     russian_domains = ('.ru', '.su', '.рф', '.xn--p1ai')
     russian_keywords = ['vk.com', 'vkontakte', 'ok.ru', 'odnoklassniki', 'mail.ru', 'yandex', 'rutube', 'rambler']
+    
+    # Useless/noise sources that produce no valuable intelligence
+    useless_sources = ['fixya', 'picsart', 'joyreactor', 'pling']
 
     profile_records = []
     if isinstance(maigret_data, dict):
@@ -154,6 +157,9 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
                         parsed_host = parsed_host.lower()
                         combined_check = f"{site} {url}".lower()
 
+                        # 0. Filter useless sources
+                        is_useless = any(source in combined_check for source in useless_sources)
+
                         # 1. Filter Adult & Dating (Tags & URL/Site strings)
                         is_adult_or_dating = any(tag in blacklisted_tags for tag in tags) or \
                                             any(kw in combined_check for kw in adult_dating_keywords)
@@ -162,7 +168,7 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
                         is_russian = parsed_host.endswith(russian_domains) or \
                                     any(rk in combined_check for rk in russian_keywords)
 
-                        if not is_adult_or_dating and not is_russian:
+                        if not is_useless and not is_adult_or_dating and not is_russian:
                             profile_records.append((site, url, status))
 
     if profile_records:
