@@ -54,7 +54,7 @@ def main_pipeline():
         st.rerun()
 
     st.title("🔎 OSINT Cross-Reference Pipeline")
-    st.markdown("Automated comparison of Ground Truth data against HIBP and Maigret.")
+    st.markdown("Automated comparison of Ground Truth data against HIBP, Maigret, Holehe, Sherlock, and Phone/Domain Intelligence.")
 
     # Create the two-column layout
     col1, col2 = st.columns([1, 1])
@@ -101,7 +101,7 @@ def main_pipeline():
 
     with col2:
         st.subheader("2. Execution & Generation")
-        st.info("Ready to connect to HIBP and Maigret.")
+        st.info("Ready to connect to HIBP, Maigret, Holehe, Sherlock, and Phone/Domain intelligence.")
 
         if st.button("🚀 Run OSINT Pipeline", use_container_width=True):
             if not ground_truth_text:
@@ -113,39 +113,94 @@ def main_pipeline():
                 if not emails_found:
                     st.error("No valid email address found in the Ground Truth data.")
                 else:
-                    target_email = emails_found[0].strip()
-
-                    from api_orchestrator import search_hibp, run_maigret
+                    from api_orchestrator import (
+                        search_hibp, run_maigret, run_holehe, run_sherlock,
+                        get_phone_info, get_whois_info
+                    )
                     from gemini_engine import analyze_osint_data
 
-                    with st.status(f"Executing OSINT Pipeline for {target_email}...", expanded=True) as status:
-                        st.write(f"Querying Have I Been Pwned for {target_email}...")
-                        hibp_res = search_hibp(target_email)
+                    # Initialize aggregated result dictionaries
+                    all_hibp_data = {}
+                    all_maigret_data = {}
+                    all_holehe_data = {}
+                    all_sherlock_data = {}
+                    all_phone_data = {}
+                    all_whois_data = {}
 
-                        if phones_found:
-                            raw_phone = re.sub(r'\D', '', phones_found[0])
+                    with st.status("Executing OSINT Pipeline for multiple targets...", expanded=True) as status:
+
+                        # ===== PROCESS ALL EMAILS =====
+                        for idx, email in enumerate(emails_found):
+                            email = email.strip()
+                            st.write(f"[{idx + 1}/{len(emails_found)}] Processing email: {email}")
+
+                            # HIBP Search
+                            st.write(f"  → Querying Have I Been Pwned...")
+                            hibp_res = search_hibp(email)
+                            all_hibp_data[email] = hibp_res
+
+                            # Maigret Search
+                            st.write(f"  → Running Maigret enumeration...")
+                            maigret_res = run_maigret(email)
+                            all_maigret_data[email] = maigret_res
+
+                            # Holehe Search
+                            st.write(f"  → Checking account registrations with Holehe...")
+                            holehe_res = run_holehe(email)
+                            all_holehe_data[email] = holehe_res
+
+                            # Sherlock Search (extract username from email)
+                            username = email.split('@')[0]
+                            st.write(f"  → Running Sherlock for username: {username}...")
+                            sherlock_res = run_sherlock(username)
+                            all_sherlock_data[email] = sherlock_res
+
+                            # WHOIS Search (extract domain from email)
+                            domain = email.split('@')[1]
+                            st.write(f"  → Extracting WHOIS data for domain: {domain}...")
+                            whois_res = get_whois_info(domain)
+                            all_whois_data[email] = whois_res
+
+                        # ===== PROCESS ALL PHONE NUMBERS =====
+                        for idx, phone in enumerate(phones_found):
+                            st.write(f"[PHONE {idx + 1}/{len(phones_found)}] Processing phone: {phone}")
+
+                            # Normalize phone number for HIBP (1########## format)
+                            raw_phone = re.sub(r'\D', '', phone)
                             hibp_phone_query = f"1{raw_phone}" if len(raw_phone) == 10 else raw_phone
 
-                            st.write(f"Querying Have I Been Pwned for phone {hibp_phone_query}...")
+                            # HIBP Search on Phone
+                            st.write(f"  → Querying Have I Been Pwned for phone...")
                             hibp_phone_res = search_hibp(hibp_phone_query)
+                            all_hibp_data[phone] = hibp_phone_res
 
-                            if isinstance(hibp_res, list) and isinstance(hibp_phone_res, list):
-                                hibp_res.extend(hibp_phone_res)
+                            # Phone Info Extraction (carrier, timezone, location)
+                            st.write(f"  → Extracting phone metadata...")
+                            phone_info = get_phone_info(phone)
+                            all_phone_data[phone] = phone_info
 
-                        st.write("Running Maigret on username (this may take a few minutes)...")
-                        maigret_res = run_maigret(target_email)
-
-                        st.write("Cross-referencing data with Gemini...")
+                        st.write("Cross-referencing aggregated data with Gemini AI...")
                         final_analysis = analyze_osint_data(
                             ground_truth_text,
-                            hibp_res,
-                            maigret_res
+                            all_hibp_data,
+                            all_maigret_data,
+                            all_holehe_data,
+                            all_sherlock_data,
+                            all_phone_data,
+                            all_whois_data
                         )
 
                         status.update(label="Analysis Complete!", state="complete", expanded=False)
 
                     from report_builder import render_report
-                    render_report(final_analysis, maigret_res, hibp_res, ground_truth_text, target_email)
+                    render_report(
+                        final_analysis,
+                        all_maigret_data,
+                        all_hibp_data,
+                        ground_truth_text,
+                        emails_found,
+                        phones_found
+                    )
 
 
 # --- GLOBAL APP WINDOW ---
