@@ -1,0 +1,40 @@
+# =========================
+# Streamlit & API Secrets (CRITICAL)
+# =========================
+.streamlit/secrets.toml
+.env
+
+# =========================
+# Local Client Data & Reports (Prevent PII Leaks)
+# =========================
+# Ignore all raw text and JSON uploads
+*.txt
+*.json
+# Ignore generated Word reports
+*.docx
+
+# Exceptions: Allow necessary project files to be committed
+!requirements.txt
+!templates/report_template.docx
+
+# =========================
+# Python & Virtual Environments
+# =========================
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# =========================
+# IDE & System Files
+# =========================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

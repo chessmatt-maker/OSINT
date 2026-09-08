@@ -1,0 +1,7 @@
+streamlit
+supabase
+google-genai
+python-docx
+requests
+maigret
+python-docx
