@@ -47,7 +47,7 @@ def set_cell_background(cell, hex_color):
     cell._tc.get_or_add_tcPr().append(parse_xml(shading_xml))
 
 
-def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text, target_email):
+def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text, emails_found, phones_found):
     """Constructs a formal Word (.docx) document in memory."""
     doc = Document()
 
@@ -89,13 +89,26 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
     gt_content_p.add_run(clean_gt_text)
 
     meta_p = doc.add_paragraph()
-    run_email = meta_p.add_run("TARGET EMAIL: ")
-    run_email.bold = True
-    meta_p.add_run(f"{target_email}\n")
+    
+    # Display all target emails
+    if emails_found:
+        run_emails = meta_p.add_run("TARGET EMAILS: ")
+        run_emails.bold = True
+        meta_p.add_run(", ".join(emails_found) + "\n")
+    
+    # Display all target phones
+    if phones_found:
+        run_phones = meta_p.add_run("TARGET PHONES: ")
+        run_phones.bold = True
+        meta_p.add_run(", ".join(phones_found) + "\n")
 
     run_sources = meta_p.add_run("INTELLIGENCE SOURCES: ")
     run_sources.bold = True
-    meta_p.add_run("Have I Been Pwned (HIBP) Breach Data, Maigret Social Enumeration")
+    meta_p.add_run(
+        "Have I Been Pwned (HIBP) Breach Data, Maigret Social Enumeration, "
+        "Holehe Account Registration Check, Sherlock Username Enumeration, "
+        "Phonenumbers Carrier & Geographic Analysis, WHOIS Domain Registration Data"
+    )
     meta_p.paragraph_format.space_after = Pt(14)
 
     # ==========================================
@@ -106,7 +119,8 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
 
     warn_p = doc.add_paragraph()
     warn_run = warn_p.add_run(
-        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required to confirm relevancy.")
+        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required..."
+    )
     warn_run.font.color.rgb = RGBColor(185, 28, 28)
     warn_run.font.italic = True
     warn_run.bold = True
@@ -125,29 +139,31 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
     russian_keywords = ['vk.com', 'vkontakte', 'ok.ru', 'odnoklassniki', 'mail.ru', 'yandex', 'rutube', 'rambler']
 
     profile_records = []
-    if isinstance(maigret_data, list):
-        for entry in maigret_data:
-            site = entry.get("sitename") or entry.get("site") or "Unknown"
-            url = entry.get("url_user") or entry.get("url") or ""
-            tags = [t.lower() for t in entry.get("tags", [])]
-            status = entry.get("status", {}).get("status") if isinstance(entry.get("status"), dict) else entry.get(
-                "status", "Claimed")
+    if isinstance(maigret_data, dict):
+        for email_key, email_maigret_results in maigret_data.items():
+            if isinstance(email_maigret_results, list):
+                for entry in email_maigret_results:
+                    site = entry.get("sitename") or entry.get("site") or "Unknown"
+                    url = entry.get("url_user") or entry.get("url") or ""
+                    tags = [t.lower() for t in entry.get("tags", [])]
+                    status = entry.get("status", {}).get("status") if isinstance(entry.get("status"), dict) else entry.get(
+                        "status", "Claimed")
 
-            if url:
-                parsed_host = urlparse(url).hostname or ""
-                parsed_host = parsed_host.lower()
-                combined_check = f"{site} {url}".lower()
+                    if url:
+                        parsed_host = urlparse(url).hostname or ""
+                        parsed_host = parsed_host.lower()
+                        combined_check = f"{site} {url}".lower()
 
-                # 1. Filter Adult & Dating (Tags & URL/Site strings)
-                is_adult_or_dating = any(tag in blacklisted_tags for tag in tags) or \
-                                     any(kw in combined_check for kw in adult_dating_keywords)
+                        # 1. Filter Adult & Dating (Tags & URL/Site strings)
+                        is_adult_or_dating = any(tag in blacklisted_tags for tag in tags) or \
+                                            any(kw in combined_check for kw in adult_dating_keywords)
 
-                # 2. Filter Russian Sites (TLDs, platforms, hostnames)
-                is_russian = parsed_host.endswith(russian_domains) or \
-                             any(rk in combined_check for rk in russian_keywords)
+                        # 2. Filter Russian Sites (TLDs, platforms, hostnames)
+                        is_russian = parsed_host.endswith(russian_domains) or \
+                                    any(rk in combined_check for rk in russian_keywords)
 
-                if not is_adult_or_dating and not is_russian:
-                    profile_records.append((site, url, status))
+                        if not is_adult_or_dating and not is_russian:
+                            profile_records.append((site, url, status))
 
     if profile_records:
         table_profiles = doc.add_table(rows=1, cols=4)
@@ -287,14 +303,28 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
     return docx_buffer
 
 
-def render_report(analysis_data, maigret_data, hibp_data, ground_truth_text, target_email):
+def render_report(analysis_data, maigret_data, hibp_data, ground_truth_text, emails_found, phones_found):
     """Renders on-screen confirmation and provides the download button."""
     st.markdown("## 📋 Export Final Dossier")
     st.success("Investigation data cross-referenced and structured successfully.")
 
-    docx_file = create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text, target_email)
+    docx_file = create_docx_report(
+        analysis_data,
+        maigret_data,
+        hibp_data,
+        ground_truth_text,
+        emails_found,
+        phones_found
+    )
 
-    username = target_email.split('@')[0] if "@" in target_email else "Subject"
+    # Generate filename from first email or phone
+    if emails_found:
+        username = emails_found[0].split('@')[0]
+    elif phones_found:
+        username = phones_found[0].replace('-', '').replace(' ', '')
+    else:
+        username = "Subject"
+    
     file_name = f"OSINT_Dossier_{username}.docx"
 
     st.download_button(
