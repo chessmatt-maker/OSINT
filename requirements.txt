@@ -5,3 +5,7 @@ python-docx
 requests
 maigret
 python-docx
+holehe
+phonenumbers
+python-whois
+sherlock-project
