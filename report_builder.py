@@ -119,7 +119,7 @@ def create_docx_report(analysis_data, maigret_data, hibp_data, ground_truth_text
 
     warn_p = doc.add_paragraph()
     warn_run = warn_p.add_run(
-        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required[...]
+        "WARNING: The following profiles are loosely associated based on username matching. Many results may be spam, inactive, or belong to unrelated individuals. Manual verification is required."
     )
     warn_run.font.color.rgb = RGBColor(185, 28, 28)
     warn_run.font.italic = True
